@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-appdirs/outdir"
 )
 
 // The live suite. It is the only place the real UNUserNotificationCenter is
@@ -133,33 +135,29 @@ func bareTool(t *testing.T) string {
 // committed.
 func liveDir(t *testing.T) string {
 	t.Helper()
-	base := os.Getenv("GO_MACOS_UN_LIVE_DIR")
-	if base == "" {
-		cfg, err := os.UserConfigDir()
-		if err != nil {
-			t.Skipf("no user config directory to build the test bundle in: %v", err)
-		}
-		base = filepath.Join(cfg, "go-macos-usernotifications")
-	}
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", base, err)
-	}
-	abs, err := filepath.Abs(base)
+	// ⛔ This was thirty lines here, and the same decision lived in four other
+	// repositories -- go-macos/screencapture, go-mswin/screencapture,
+	// go-widgets/window and go-aiquota/tray. go-appdirs/outdir is it written
+	// once, and adopting it fixes two things this copy got wrong.
+	//
+	// It resolved no symbolic links, so a directory reached through one found
+	// no work tree and was accepted -- and what gets written here is a SIGNED
+	// EXECUTABLE in an .app bundle, which is worse in a repository than a
+	// picture.
+	//
+	// And it called MkdirAll BEFORE the check, so a refused path still left an
+	// empty directory behind. outdir.Ensure creates only what it has accepted.
+	dir, err := outdir.Ensure(outdir.Spec{
+		App: "go-macos-usernotifications",
+		Env: "GO_MACOS_UN_LIVE_DIR",
+	})
 	if err != nil {
-		t.Fatalf("abs %s: %v", base, err)
+		// The refusal names the work tree, which is what somebody who has to
+		// move the directory needs to know.
+		t.Fatalf("refusing to build the test bundle: %v. A signed executable "+
+			"written into a repository is one `git add -A` from being published.", err)
 	}
-	for dir := abs; ; {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			t.Fatalf("refusing to build the test bundle at %s: it is inside the work tree %s. "+
-				"A signed executable written into a repository is one `git add -A` from being published.", abs, dir)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return abs
+	return dir
 }
 
 // bundledTool assembles, signs and registers an .app around cmd/unsend and
